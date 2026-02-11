@@ -1,6 +1,6 @@
 """Extract stats (dimensions, character count, etc.) from text, image, and PDF files."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 

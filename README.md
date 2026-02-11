@@ -56,6 +56,10 @@ python cost_calculator.py sample/ --format table   # Human-readable (default)
 python cost_calculator.py sample/ --format json    # Machine-readable
 python cost_calculator.py sample/ --format both    # Table + JSON
 
+# Save JSON to file
+python cost_calculator.py sample/ -o results.json  # Table to stdout + JSON to file
+python cost_calculator.py sample/ --format json -o results.json
+
 # Options
 python cost_calculator.py sample/ --model gpt-4.1  # Cost model (default)
 python cost_calculator.py sample/ --detail low      # Low-detail images (85 tokens)

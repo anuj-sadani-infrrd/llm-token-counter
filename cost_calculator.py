@@ -13,12 +13,11 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-
-load_dotenv()
-
+from llm_tokens.cost import estimate_cost
 from llm_tokens.stats import discover_files, get_file_stats
 from llm_tokens.tokens import estimate_tokens
-from llm_tokens.cost import estimate_cost
+
+load_dotenv()
 
 
 def format_number(n: int) -> str:
@@ -83,12 +82,11 @@ def _count_tokens_bedrock(path: Path, stats) -> tuple[int | None, str | None]:
         elif stats.modality == "image":
             ext = path.suffix.lower()
             fmt = "png" if ext == ".png" else "jpeg" if ext in (".jpg", ".jpeg") else "png"
-            content_blocks = [
-                {"image": {"format": fmt, "source": {"bytes": path.read_bytes()}}}
-            ]
+            content_blocks = [{"image": {"format": fmt, "source": {"bytes": path.read_bytes()}}}]
         elif stats.modality == "pdf":
             # Bedrock Converse expects images; render first PDF page to PNG
             import fitz
+
             doc = fitz.open(path)
             if len(doc) == 0:
                 doc.close()
@@ -100,11 +98,7 @@ def _count_tokens_bedrock(path: Path, stats) -> tuple[int | None, str | None]:
         else:
             return None, "Unsupported modality"
 
-        input_converse = {
-            "messages": [
-                {"role": "user", "content": content_blocks}
-            ]
-        }
+        input_converse = {"messages": [{"role": "user", "content": content_blocks}]}
 
         resp = client.count_tokens(
             modelId=BEDROCK_HAIKU_45_MODEL,
@@ -191,6 +185,18 @@ def run_single(path: Path, detail: str) -> dict | None:
 
     dims = stats.dimensions_str
 
+    # Modality-specific details for full JSON output
+    extra: dict = {}
+    if stats.text_stats:
+        extra["word_count"] = stats.text_stats.word_count
+        extra["line_count"] = stats.text_stats.line_count
+    if stats.image_stats:
+        extra["width"] = stats.image_stats.width
+        extra["height"] = stats.image_stats.height
+        extra["format"] = stats.image_stats.format
+    if stats.pdf_stats:
+        extra["page_count"] = stats.pdf_stats.page_count
+
     return {
         "file": _rel_path(path),
         "modality": stats.modality,
@@ -200,10 +206,11 @@ def run_single(path: Path, detail: str) -> dict | None:
         "file_size_bytes": stats.file_size_bytes,
         "tokens_openai": tokens_openai,
         "tokens_gemini": tokens_gemini,
-        "tokens_bedrock": tokens_bedrock,
+        "tokens_claude": tokens_bedrock,
         "cost_openai": cost_openai,
         "cost_gemini": cost_gemini,
-        "cost_bedrock": cost_bedrock,
+        "cost_claude": cost_bedrock,
+        **extra,
     }
 
 
@@ -214,26 +221,36 @@ def output_table(results: list[dict]) -> None:
         return
 
     headers = [
-        "File", "Modality", "Chars", "Dims", "Size",
-        "Tokens (GPT-4.1)", "Tokens (Gemini)", "Tokens (Haiku-4.5)",
-        "Cost (GPT-4.1)", "Cost (Gemini)", "Cost (Haiku-4.5)",
+        "File",
+        "Modality",
+        "Chars",
+        "Dims",
+        "Size",
+        "Tokens (GPT-4.1)",
+        "Tokens (Gemini)",
+        "Tokens (Haiku-4.5)",
+        "Cost (GPT-4.1)",
+        "Cost (Gemini)",
+        "Cost (Haiku-4.5)",
     ]
 
     rows = []
     for r in results:
-        rows.append([
-            r["file"],
-            r["modality"],
-            str(r["chars_display"]),
-            r["dims"],
-            format_file_size(r["file_size_bytes"]),
-            format_number(r["tokens_openai"]),
-            format_number(r["tokens_gemini"]) if r.get("tokens_gemini") is not None else "-",
-            format_number(r["tokens_bedrock"]) if r.get("tokens_bedrock") is not None else "-",
-            format_cost(r["cost_openai"]),
-            format_cost(r["cost_gemini"]) if r.get("cost_gemini") is not None else "-",
-            format_cost(r["cost_bedrock"]) if r.get("cost_bedrock") is not None else "-",
-        ])
+        rows.append(
+            [
+                r["file"],
+                r["modality"],
+                str(r["chars_display"]),
+                r["dims"],
+                format_file_size(r["file_size_bytes"]),
+                format_number(r["tokens_openai"]),
+                format_number(r["tokens_gemini"]) if r.get("tokens_gemini") is not None else "-",
+                format_number(r["tokens_claude"]) if r.get("tokens_claude") is not None else "-",
+                format_cost(r["cost_openai"]),
+                format_cost(r["cost_gemini"]) if r.get("cost_gemini") is not None else "-",
+                format_cost(r["cost_claude"]) if r.get("cost_claude") is not None else "-",
+            ]
+        )
 
     col_widths = [max(len(str(row[i])) for row in [headers] + rows) for i in range(len(headers))]
     col_widths[0] = min(col_widths[0], 42)
@@ -248,49 +265,94 @@ def output_table(results: list[dict]) -> None:
 
     total_openai = sum(r["tokens_openai"] for r in results)
     total_gemini = sum(r["tokens_gemini"] or 0 for r in results)
-    total_bedrock = sum(r["tokens_bedrock"] or 0 for r in results)
+    total_claude = sum(r["tokens_claude"] or 0 for r in results)
     total_cost_openai = sum(r["cost_openai"] for r in results)
     total_cost_gemini = sum(r["cost_gemini"] or 0 for r in results)
-    total_cost_bedrock = sum(r["cost_bedrock"] or 0 for r in results)
+    total_cost_claude = sum(r["cost_claude"] or 0 for r in results)
     total_size = sum(r["file_size_bytes"] for r in results)
     total_row = [
-        "(total)", "", "", "", format_file_size(total_size),
+        "(total)",
+        "",
+        "",
+        "",
+        format_file_size(total_size),
         format_number(total_openai),
         format_number(total_gemini) if total_gemini else "-",
-        format_number(total_bedrock) if total_bedrock else "-",
+        format_number(total_claude) if total_claude else "-",
         format_cost(total_cost_openai),
         format_cost(total_cost_gemini) if total_cost_gemini else "-",
-        format_cost(total_cost_bedrock) if total_cost_bedrock else "-",
+        format_cost(total_cost_claude) if total_cost_claude else "-",
     ]
     print(fmt_row(total_row, col_widths))
 
 
-def output_json(results: list[dict]) -> None:
-    """Print results as JSON."""
-    out = []
+def _results_to_json(results: list[dict]) -> dict:
+    """Convert results to JSON-serializable structure with full table data and summary."""
+    files_data = []
     for r in results:
         entry = {
             "file": r["file"],
             "modality": r["modality"],
+            "chars": str(r["chars_display"]),
             "dimensions": r["dims"],
+            "size": format_file_size(r["file_size_bytes"]),
             "file_size_bytes": r["file_size_bytes"],
             "tokens_openai": r["tokens_openai"],
             "tokens_gemini": r.get("tokens_gemini"),
-            "tokens_bedrock": r.get("tokens_bedrock"),
+            "tokens_claude": r.get("tokens_claude"),
             "cost_openai_usd": round(r["cost_openai"], 6),
             "cost_gemini_usd": round(r["cost_gemini"], 6) if r.get("cost_gemini") is not None else None,
-            "cost_bedrock_usd": round(r["cost_bedrock"], 6) if r.get("cost_bedrock") is not None else None,
+            "cost_claude_usd": round(r["cost_claude"], 6) if r.get("cost_claude") is not None else None,
         }
-        if r.get("char_count") is not None:
-            entry["character_count"] = r["char_count"]
-        out.append(entry)
-    print(json.dumps(out, indent=2))
+        # Always include character_count for consistency (null for images)
+        entry["character_count"] = r.get("char_count")
+        # Modality-specific details (null when not applicable)
+        entry["word_count"] = r.get("word_count")
+        entry["line_count"] = r.get("line_count")
+        entry["width"] = r.get("width")
+        entry["height"] = r.get("height")
+        entry["format"] = r.get("format")
+        entry["page_count"] = r.get("page_count")
+        files_data.append(entry)
+
+    total_openai = sum(r["tokens_openai"] for r in results)
+    total_gemini = sum(r["tokens_gemini"] or 0 for r in results)
+    total_claude = sum(r["tokens_claude"] or 0 for r in results)
+    total_cost_openai = sum(r["cost_openai"] for r in results)
+    total_cost_gemini = sum(r["cost_gemini"] or 0 for r in results)
+    total_cost_claude = sum(r["cost_claude"] or 0 for r in results)
+    total_size = sum(r["file_size_bytes"] for r in results)
+
+    summary = {
+        "file": "(total)",
+        "total_files": len(results),
+        "size": format_file_size(total_size),
+        "total_file_size_bytes": total_size,
+        "tokens_openai": total_openai,
+        "tokens_gemini": total_gemini if total_gemini else None,
+        "tokens_claude": total_claude if total_claude else None,
+        "cost_openai_usd": round(total_cost_openai, 6),
+        "cost_gemini_usd": round(total_cost_gemini, 6) if total_cost_gemini else None,
+        "cost_claude_usd": round(total_cost_claude, 6) if total_cost_claude else None,
+    }
+
+    return {"results": files_data, "summary": summary}
+
+
+def output_json(results: list[dict]) -> None:
+    """Print results as JSON."""
+    print(json.dumps(_results_to_json(results), indent=2))
+
+
+def save_json(results: list[dict], path: Path) -> None:
+    """Save results as JSON to a file."""
+    data = _results_to_json(results)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    print(f"Results saved to {path}", file=sys.stderr)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Calculate token counts and costs for text, image, and PDF files."
-    )
+    parser = argparse.ArgumentParser(description="Calculate token counts and costs for text, image, and PDF files.")
     parser.add_argument(
         "paths",
         nargs="+",
@@ -325,6 +387,13 @@ def main() -> int:
         action="store_true",
         help="Do not recurse into subdirectories",
     )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        metavar="FILE",
+        help="Save results as JSON to FILE (in addition to stdout output)",
+    )
 
     args = parser.parse_args()
 
@@ -353,6 +422,9 @@ def main() -> int:
         output_json(results)
     else:
         output_table(results)
+
+    if args.output is not None:
+        save_json(results, args.output)
 
     return 0
 

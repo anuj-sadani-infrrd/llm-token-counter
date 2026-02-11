@@ -2,9 +2,8 @@
 
 import math
 from pathlib import Path
-from typing import Optional
 
-from llm_tokens.stats import FileStats, get_file_stats
+from llm_tokens.stats import FileStats
 
 # OpenAI GPT-4o/4.1/4.5 image token constants
 OPENAI_IMAGE_BASE_TOKENS = 85
